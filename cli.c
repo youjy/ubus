@@ -246,21 +246,25 @@ static void wait_check_object(struct cli_wait_data *data, const char *path)
 static void wait_event_cb(struct ubus_context *ctx, struct ubus_event_handler *ev,
 			  const char *type, struct blob_attr *msg)
 {
-	static const struct blobmsg_policy policy = {
-		"path", BLOBMSG_TYPE_STRING
+	enum {
+		WAIT_FOR_PATH_ATTR,
+		__WAIT_FOR_ATTR_MAX
+	};
+	static const struct blobmsg_policy policy[__WAIT_FOR_ATTR_MAX] = {
+		[WAIT_FOR_PATH_ATTR] = { .name = "path", .type = BLOBMSG_TYPE_STRING },
 	};
 	struct cli_wait_data *data = container_of(ev, struct cli_wait_data, ev);
-	struct blob_attr *attr;
+	struct blob_attr *tb[__WAIT_FOR_ATTR_MAX] = {0};
 	const char *path;
 
 	if (strcmp(type, "ubus.object.add") != 0)
 		return;
 
-	blobmsg_parse(&policy, 1, &attr, blob_data(msg), blob_len(msg));
-	if (!attr)
+	blobmsg_parse(policy, ARRAY_SIZE(policy), tb, blob_data(msg), blob_len(msg));
+	if (!tb[WAIT_FOR_PATH_ATTR])
 		return;
 
-	path = blobmsg_data(attr);
+	path = blobmsg_data(tb[WAIT_FOR_PATH_ATTR]);
 	wait_check_object(data, path);
 }
 
