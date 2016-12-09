@@ -34,6 +34,7 @@ struct ubus_msg_buf {
 	struct blob_attr *data;
 	int fd;
 	int len;
+	int offset;
 };
 
 struct ubus_client {
@@ -48,7 +49,7 @@ struct ubus_client {
 	struct list_head objects;
 
 	struct ubus_msg_buf *tx_queue[UBUSD_CLIENT_BACKLOG];
-	unsigned int txq_cur, txq_tail, txq_ofs;
+	unsigned int txq_cur, txq_tail;
 
 	struct ubus_msg_buf *pending_msg;
 	int pending_msg_offset;

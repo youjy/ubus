@@ -90,7 +90,7 @@ void ubus_msg_free(struct ubus_msg_buf *ub)
 	}
 }
 
-static int ubus_msg_writev(int fd, struct ubus_msg_buf *ub, int offset)
+static int ubus_msg_writev(int fd, struct ubus_msg_buf *ub)
 {
 	static struct iovec iov[2];
 	static struct {
@@ -109,6 +109,7 @@ static int ubus_msg_writev(int fd, struct ubus_msg_buf *ub, int offset)
 		.msg_control = &fd_buf,
 		.msg_controllen = sizeof(fd_buf),
 	};
+	int written;
 
 	fd_buf.fd = ub->fd;
 	if (ub->fd < 0) {
@@ -116,7 +117,7 @@ static int ubus_msg_writev(int fd, struct ubus_msg_buf *ub, int offset)
 		msghdr.msg_controllen = 0;
 	}
 
-	if (offset < sizeof(ub->hdr)) {
+	if (ub->offset < sizeof(ub->hdr)) {
 		struct ubus_msghdr hdr;
 
 		hdr.version = ub->hdr.version;
@@ -124,16 +125,19 @@ static int ubus_msg_writev(int fd, struct ubus_msg_buf *ub, int offset)
 		hdr.seq = cpu_to_be16(ub->hdr.seq);
 		hdr.peer = cpu_to_be32(ub->hdr.peer);
 
-		iov[0].iov_base = ((char *) &hdr) + offset;
-		iov[0].iov_len = sizeof(hdr) - offset;
+		iov[0].iov_base = ((char *) &hdr) + ub->offset;
+		iov[0].iov_len = sizeof(hdr) - ub->offset;
 		iov[1].iov_base = (char *) ub->data;
 		iov[1].iov_len = ub->len;
 
-		return sendmsg(fd, &msghdr, 0);
+		written = sendmsg(fd, &msghdr, 0);
 	} else {
-		offset -= sizeof(ub->hdr);
-		return write(fd, ((char *) ub->data) + offset, ub->len - offset);
+		int offset = ub->offset - sizeof(ub->hdr);
+		written = write(fd, ((char *) ub->data) + offset, ub->len - offset);
 	}
+	if (written > 0)
+		ub->offset += written;
+	return written;
 }
 
 static void ubus_msg_enqueue(struct ubus_client *cl, struct ubus_msg_buf *ub)
@@ -148,21 +152,17 @@ static void ubus_msg_enqueue(struct ubus_client *cl, struct ubus_msg_buf *ub)
 /* takes the msgbuf reference */
 void ubus_msg_send(struct ubus_client *cl, struct ubus_msg_buf *ub, bool free)
 {
-	int written;
-
 	if (ub->hdr.type != UBUS_MSG_MONITOR)
 		ubusd_monitor_message(cl, ub, true);
 
 	if (!cl->tx_queue[cl->txq_cur]) {
-		written = ubus_msg_writev(cl->sock.fd, ub, 0);
+		int written = ubus_msg_writev(cl->sock.fd, ub);
 
 		if (written < 0)
 			written = 0;
 
 		if (written >= ub->len + sizeof(ub->hdr))
 			goto out;
-
-		cl->txq_ofs = written;
 
 		/* get an event once we can write to the socket again */
 		uloop_fd_add(&cl->sock, ULOOP_READ | ULOOP_WRITE | ULOOP_EDGE_TRIGGER);
@@ -187,7 +187,6 @@ static void ubus_msg_dequeue(struct ubus_client *cl)
 		return;
 
 	ubus_msg_free(ub);
-	cl->txq_ofs = 0;
 	cl->tx_queue[cl->txq_cur] = NULL;
 	cl->txq_cur = (cl->txq_cur + 1) % ARRAY_SIZE(cl->tx_queue);
 }
@@ -230,7 +229,7 @@ static void client_cb(struct uloop_fd *sock, unsigned int events)
 	while ((ub = ubus_msg_head(cl))) {
 		int written;
 
-		written = ubus_msg_writev(sock->fd, ub, cl->txq_ofs);
+		written = ubus_msg_writev(sock->fd, ub);
 		if (written < 0) {
 			switch(errno) {
 			case EINTR:
@@ -242,8 +241,7 @@ static void client_cb(struct uloop_fd *sock, unsigned int events)
 			break;
 		}
 
-		cl->txq_ofs += written;
-		if (cl->txq_ofs < ub->len + sizeof(ub->hdr))
+		if (ub->offset < ub->len + sizeof(ub->hdr))
 			break;
 
 		ubus_msg_dequeue(cl);
