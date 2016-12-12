@@ -59,6 +59,7 @@ struct ubus_msg_buf *ubus_msg_new(void *data, int len, bool shared)
 		return NULL;
 
 	ub->fd = -1;
+	INIT_LIST_HEAD(&ub->list);
 
 	if (shared) {
 		ub->refcount = ~0;
@@ -142,11 +143,9 @@ static int ubus_msg_writev(int fd, struct ubus_msg_buf *ub)
 
 static void ubus_msg_enqueue(struct ubus_client *cl, struct ubus_msg_buf *ub)
 {
-	if (cl->tx_queue[cl->txq_tail])
-		return;
-
-	cl->tx_queue[cl->txq_tail] = ubus_msg_ref(ub);
-	cl->txq_tail = (cl->txq_tail + 1) % ARRAY_SIZE(cl->tx_queue);
+	ub = ubus_msg_ref(ub);
+	if (ub)
+		list_add_tail(&ub->list, &cl->tx_queue);
 }
 
 /* takes the msgbuf reference */
@@ -155,7 +154,7 @@ void ubus_msg_send(struct ubus_client *cl, struct ubus_msg_buf *ub, bool free)
 	if (ub->hdr.type != UBUS_MSG_MONITOR)
 		ubusd_monitor_message(cl, ub, true);
 
-	if (!cl->tx_queue[cl->txq_cur]) {
+	if (list_empty(&cl->tx_queue)) {
 		int written = ubus_msg_writev(cl->sock.fd, ub);
 
 		if (written < 0)
@@ -176,7 +175,9 @@ out:
 
 static struct ubus_msg_buf *ubus_msg_head(struct ubus_client *cl)
 {
-	return cl->tx_queue[cl->txq_cur];
+	if (list_empty(&cl->tx_queue))
+		return NULL;
+	return list_first_entry(&cl->tx_queue, struct ubus_msg_buf, list);
 }
 
 static void ubus_msg_dequeue(struct ubus_client *cl)
@@ -186,9 +187,8 @@ static void ubus_msg_dequeue(struct ubus_client *cl)
 	if (!ub)
 		return;
 
+	list_del(&ub->list);
 	ubus_msg_free(ub);
-	cl->tx_queue[cl->txq_cur] = NULL;
-	cl->txq_cur = (cl->txq_cur + 1) % ARRAY_SIZE(cl->tx_queue);
 }
 
 static void handle_client_disconnect(struct ubus_client *cl)

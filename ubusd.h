@@ -23,12 +23,12 @@
 #include "ubusmsg.h"
 #include "ubusd_acl.h"
 
-#define UBUSD_CLIENT_BACKLOG	32
 #define UBUS_OBJ_HASH_BITS	4
 
 extern struct blob_buf b;
 
 struct ubus_msg_buf {
+	struct list_head list;
 	uint32_t refcount; /* ~0: uses external data buffer */
 	struct ubus_msghdr hdr;
 	struct blob_attr *data;
@@ -48,8 +48,7 @@ struct ubus_client {
 
 	struct list_head objects;
 
-	struct ubus_msg_buf *tx_queue[UBUSD_CLIENT_BACKLOG];
-	unsigned int txq_cur, txq_tail;
+	struct list_head tx_queue;
 
 	struct ubus_msg_buf *pending_msg;
 	int pending_msg_offset;
